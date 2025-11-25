@@ -1,13 +1,15 @@
-# Exahash AI — Streamlit + Dual Exchange
+# ExaHash AI - Institutional Crypto Dashboard
 
-Deployment guide:
+Professional crypto analysis app using Streamlit, Gemini AI, and Real-time Data from Binance (via CCXT).
 
-1. Fork/clone the repo
-2. Upload to GitHub
-3. Go to https://render.com
-4. New → Web Service
-5. Build Command:
-    pip install -r requirements.txt
-6. Start Command:
-    streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
-7. Add Environment Variables:
+## Features
+- **Live TradingView Chart**: Interactive real-time charts.
+- **AI Risk Scoring**: Uses Google Gemini to analyze risk and market sentiment.
+- **Whale Feed**: Detects large transactions (>$50k) a la Nansen.
+- **Multi-Exchange Data**: Integrated with CCXT.
+
+## How to Run Locally
+1. Clone this repo.
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
