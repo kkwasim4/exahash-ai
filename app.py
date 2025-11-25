@@ -2,65 +2,51 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import requests
-import plotly.express as px
 import plotly.graph_objects as go
 import google.generativeai as genai
 import os
+import time
 
 # ==========================================
-# 1. SETUP: DARK MODE & TRADER THEME
+# 1. SETUP & UI THEME (TITAN EDITION)
 # ==========================================
 st.set_page_config(
-    page_title="ExaHash Alpha Hunter",
-    page_icon="🚀",
+    page_title="ExaHash TITAN | Pro Analytics",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
 )
 
-# TRADING TERMINAL STYLE (Dark & Neon)
+# PRO TRADER CSS
 st.markdown("""
 <style>
-    /* Dark Theme Background */
-    .stApp { background-color: #0e1117; color: #e6e6e6; }
+    /* Background & Global Font */
+    .stApp { background-color: #0b0e11; color: #c9d1d9; font-family: 'Roboto Mono', monospace; }
     
     /* Metrics */
     div[data-testid="stMetric"] {
         background-color: #161b22;
         border: 1px solid #30363d;
-        border-radius: 6px;
-        padding: 10px;
+        border-radius: 8px;
+        padding: 15px;
     }
-    div[data-testid="stMetricValue"] { color: #00ff7f !important; font-family: 'Monospace'; }
+    div[data-testid="stMetricValue"] { color: #58a6ff !important; font-weight: 700; }
     
     /* Tables */
-    div[data-testid="stDataFrame"] { background-color: #0e1117; }
+    div[data-testid="stDataFrame"] { border: 1px solid #30363d; }
     
-    /* Custom Badge */
-    .pump-badge {
-        background-color: #238636;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-weight: bold;
-        font-size: 12px;
-        border: 1px solid #2ea043;
-    }
-    .vol-badge {
-        background-color: #1f6feb;
-        color: white;
-        padding: 4px 8px;
-        border-radius: 4px;
-        font-weight: bold;
-        font-size: 12px;
-    }
+    /* Custom Badges */
+    .signal-buy { background: #238636; color: white; padding: 2px 8px; border-radius: 4px; font-weight:bold; }
+    .signal-sell { background: #da3633; color: white; padding: 2px 8px; border-radius: 4px; font-weight:bold; }
+    .signal-neu { background: #6e7681; color: white; padding: 2px 8px; border-radius: 4px; }
     
-    /* AI Card */
-    .alpha-card {
+    /* AI Panel */
+    .titan-card {
         background: #161b22;
-        border: 1px solid #30363d;
+        border-left: 4px solid #a371f7; /* Purple AI */
         padding: 20px;
-        border-radius: 8px;
-        border-left: 5px solid #00ff7f;
+        border-radius: 6px;
+        margin-top: 10px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -70,249 +56,290 @@ if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
 
 # ==========================================
-# 2. ALPHA ENGINE (MOMENTUM LOGIC)
+# 2. TECHNICAL ANALYSIS ENGINE (THE MATH)
 # ==========================================
-class AlphaEngine:
+class TitanEngine:
     BASE_URL = "https://api.coingecko.com/api/v3"
+    FG_URL = "https://api.alternative.me/fng/"
     
-    @st.cache_data(ttl=60) # Refresh tiap 60 detik untuk data momentum
+    def calculate_rsi(self, prices, period=14):
+        """Menghitung RSI dari list harga (Sparkline)"""
+        if len(prices) < period: return 50 # Default Neutral
+        
+        series = pd.Series(prices)
+        delta = series.diff()
+        
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi.iloc[-1] # Ambil RSI terakhir
+
+    def get_fear_greed(self):
+        try:
+            res = requests.get(self.FG_URL).json()
+            data = res['data'][0]
+            return int(data['value']), data['value_classification']
+        except:
+            return 50, "Neutral"
+
+    @st.cache_data(ttl=120) 
     def scan_market(_self):
         all_coins = []
-        # Tarik 400 koin teratas (Cukup untuk cari hidden gem, jangan terlalu bawah nanti scam)
-        pages = [1, 2] 
-        
-        for page in pages:
+        # Fetch 2 Pages (Top 300 Liquid Assets)
+        for page in [1, 2]:
             try:
                 params = {
                     "vs_currency": "usd",
                     "order": "market_cap_desc",
-                    "per_page": 200, 
+                    "per_page": 150, 
                     "page": page,
                     "sparkline": "true",
                     "price_change_percentage": "1h,24h,7d"
                 }
                 res = requests.get(f"{_self.BASE_URL}/coins/markets", params=params)
-                if res.status_code == 200:
-                    all_coins.extend(res.json())
+                if res.status_code == 200: all_coins.extend(res.json())
             except: pass
             
         if not all_coins: return pd.DataFrame()
         
         df = pd.DataFrame(all_coins)
         
-        # --- RUMUS PUMP DETECTOR ---
+        # --- ADVANCED CALCULATIONS ---
         
-        # 1. Volume Intensity (Turnover)
-        # Jika Volume > 20% Market Cap, artinya ada akumulasi masif
-        df['vol_intensity'] = df['total_volume'] / df['market_cap']
+        # 1. Technicals (RSI) from Sparkline
+        # Sparkline CoinGecko itu array harga per jam selama 7 hari (168 jam)
+        # Kita pakai ini untuk hitung RSI 14-Jam terakhir
+        df['prices_array'] = df['sparkline_in_7d'].apply(lambda x: x.get('price', []) if isinstance(x, dict) else [])
+        df['RSI'] = df['prices_array'].apply(lambda x: _self.calculate_rsi(x, 14))
         
-        # 2. Momentum Score (0-100)
-        # Fokus pada kenaikan 1 jam terakhir (Immediate Pump)
-        # Rumus: (1h% * 3) + (24h% * 1). Kita beri bobot tinggi pada 1H.
-        df['1h_change'] = df['price_change_percentage_1h_in_currency']
-        df['24h_change'] = df['price_change_percentage_24h_in_currency']
+        # 2. Volume/Cap Ratio (Liquidity Stress)
+        df['Vol/Cap'] = df['total_volume'] / df['market_cap']
         
-        # Normalisasi NaNs
-        df['1h_change'] = df['1h_change'].fillna(0)
-        df['24h_change'] = df['24h_change'].fillna(0)
+        # 3. Deviation from ATH (Discount Factor)
+        df['ATH Dist'] = df['ath_change_percentage']
         
-        df['momentum_score'] = (df['1h_change'] * 3) + df['24h_change']
+        # 4. Signal Flagging
+        def get_signal(row):
+            score = 0
+            # RSI Logic
+            if row['RSI'] < 30: score += 2 # Oversold (Bullish Divergence Potential)
+            elif row['RSI'] > 70: score -= 2 # Overbought
+            
+            # Momentum Logic
+            if row['price_change_percentage_24h'] > 5: score += 1
+            if row['Vol/Cap'] > 0.1: score += 1
+            
+            if score >= 3: return "STRONG BUY"
+            elif score >= 1: return "BUY"
+            elif score <= -2: return "SELL"
+            else: return "HOLD"
+            
+        df['Signal'] = df.apply(get_signal, axis=1)
         
-        # 3. Near ATH (Breakout Potential)
-        df['dist_from_ath'] = df['ath_change_percentage'] # Usually negative
-        
-        # 4. Filter Volume Minimum (Hilangkan koin mati/scam dengan volume < $1M)
-        df = df[df['total_volume'] > 1_000_000].copy()
-        
-        # Formatting Columns
+        # Clean Data
         cols = [
             'image', 'symbol', 'name', 'current_price', 
-            '1h_change', '24h_change', 'total_volume', 
-            'vol_intensity', 'momentum_score', 'sparkline_in_7d', 'dist_from_ath'
+            'price_change_percentage_24h', 'total_volume', 'market_cap', 
+            'RSI', 'Vol/Cap', 'ATH Dist', 'Signal', 'prices_array'
         ]
-        
         final = df[cols].copy()
         final.columns = [
             'Icon', 'Ticker', 'Name', 'Price', 
-            '1h %', '24h %', 'Volume', 
-            'Vol/Cap', 'Score', 'Chart', 'ATH Dist %'
+            '24h %', 'Volume', 'Mkt Cap', 
+            'RSI (14)', 'Vol/Cap', 'ATH Dist %', 'Signal', 'ChartData'
         ]
         final['Ticker'] = final['Ticker'].str.upper()
-        
-        # Sort by Momentum Score by default
-        return final.sort_values(by='Score', ascending=False)
+        return final
 
-engine = AlphaEngine()
+engine = TitanEngine()
 
 # ==========================================
-# 3. AI ALPHA CALLER
+# 3. AI STRATEGIST
 # ==========================================
-def get_alpha_call(row):
-    if not GOOGLE_API_KEY: return "AI Key Missing."
+def get_titan_strategy(row, fg_index):
+    if not GOOGLE_API_KEY: return "⚠️ AI Key Missing"
     
-    # Prompt khusus mencari PUMP
+    rsi_state = "Oversold" if row['RSI (14)'] < 30 else ("Overbought" if row['RSI (14)'] > 70 else "Neutral")
+    
     prompt = f"""
-    You are a "Degen" Crypto Analyst looking for pumps and breakouts.
-    Analyze {row['Ticker']}:
-    - 1h Change: {row['1h %']:.2f}% (Immediate Action)
-    - 24h Change: {row['24h %']:.2f}%
-    - Volume Intensity: {row['Vol/Cap']:.2f} (Normal is 0.05, Pump is > 0.2)
-    - Distance from ATH: {row['ATH Dist %']:.2f}%
+    Act as an Institutional Algo-Trader. Analyze {row['Ticker']}:
     
-    Is this a "PUMP SIGNAL"?
-    Output strict format:
-    **SIGNAL:** [BUY BREAKOUT / WAIT / FAKE PUMP]
-    **CONFIDENCE:** [0-100]%
-    **REASON:** (One short sentence about volume/momentum).
+    MARKET CONTEXT:
+    - Global Fear & Greed: {fg_index} (0=Extreme Fear, 100=Greed)
+    
+    ASSET DATA:
+    - Price: ${row['Price']}
+    - Trend (24h): {row['24h %']:.2f}%
+    - RSI (14hr): {row['RSI (14)']:.1f} ({rsi_state})
+    - Volume Intensity: {row['Vol/Cap']:.2f} (Active if > 0.1)
+    - Discount from ATH: {row['ATH Dist %']:.1f}%
+    
+    TASK:
+    1. Technical Diagnosis: (Is it extended? Is it bottoming?)
+    2. Smart Money Action: (Are whales accumulating or distributing based on volume?)
+    3. Final Call: [AGGRESSIVE BUY / ACCUMULATE / WAIT / TAKE PROFIT]
+    
+    Keep it short, sharp, and professional.
     """
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-pro')
         return model.generate_content(prompt).text
     except: return "AI Busy."
 
 # ==========================================
-# 4. DASHBOARD UI
+# 4. TITAN DASHBOARD
 # ==========================================
 
-# HEADER
-c1, c2 = st.columns([8, 2])
-with c1:
-    st.title("🚀 ExaHash Alpha Hunter")
-    st.caption("Momentum Scanner • Volume Shock Detector • Breakout Radar")
-with c2:
-    if st.button("🔥 SCAN MARKET"):
-        st.cache_data.clear()
-        st.rerun()
+# --- GLOBAL METRICS ---
+fg_val, fg_class = engine.get_fear_greed()
+c_head1, c_head2 = st.columns([3, 1])
+
+with c_head1:
+    st.title("⚡ ExaHash TITAN")
+    st.caption("Advanced Screener: RSI • Momentum • Volume • AI Logic")
+
+with c_head2:
+    # Fear & Greed Widget
+    color = "#238636" if fg_val > 50 else "#da3633"
+    st.markdown(f"""
+    <div style="text-align:center; padding:10px; border:1px solid #30363d; border-radius:8px; background:#161b22;">
+        <div style="font-size:12px; color:#8b949e;">FEAR & GREED</div>
+        <div style="font-size:24px; font-weight:bold; color:{color};">{fg_val}</div>
+        <div style="font-size:12px; color:{color};">{fg_class}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # LOAD DATA
-with st.spinner("Scanning for high momentum assets..."):
+with st.spinner("Calculating RSI & processing market data..."):
     df = engine.scan_market()
 
 if not df.empty:
-    # --- HOT METRICS ---
-    # Cari koin yang lagi "Gila" (1h change > 3% dan Volume tinggi)
-    hot_coins = df[ (df['1h %'] > 2) & (df['Vol/Cap'] > 0.1) ]
-    top_vol = df.sort_values('Vol/Cap', ascending=False).iloc[0]
-    top_gain = df.sort_values('24h %', ascending=False).iloc[0]
+    # --- METRICS ROW ---
+    # Filter "Oversold Gems" (RSI < 35 & Vol > 0.05) - Setup Reversal
+    oversold_gems = df[(df['RSI (14)'] < 35) & (df['Vol/Cap'] > 0.05)]
+    # Filter "Momentum Rockets" (RSI > 50 & 24h > 5%) - Setup Follow Trend
+    rockets = df[(df['24h %'] > 5) & (df['Vol/Cap'] > 0.1)]
     
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Pump Candidates", f"{len(hot_coins)} Assets", "Active Now")
-    m2.metric("Highest Volume Stress", f"{top_vol['Ticker']}", f"{top_vol['Vol/Cap']:.2f} Ratio")
-    m3.metric("Top Gainer (24h)", f"{top_gain['Ticker']}", f"+{top_gain['24h %']:.1f}%")
-    m4.metric("Market Sentiment", "Greed" if len(hot_coins) > 5 else "Neutral")
+    m1.metric("Market Breadth", f"{len(df)} Pairs")
+    m2.metric("Oversold Opps", f"{len(oversold_gems)}", "Potential Reversal")
+    m3.metric("Momentum Movers", f"{len(rockets)}", "Trend Following")
+    m4.metric("BTC Price", f"${df.iloc[0]['Price']:,.0f}", f"{df.iloc[0]['24h %']:.2f}%")
 
-    # --- TABS STRATEGI ---
-    tab1, tab2, tab3 = st.tabs(["🚀 MOMENTUM (Pumps)", "🐋 VOLUME SHOCK", "💎 NEAR ATH"])
+    st.write("")
     
-    with tab1:
-        st.markdown("### ⚡ Fast Movers (High 1H %)")
-        st.write("Koin yang sedang bergerak **sekarang**. Fokus pada kolom **1h %**.")
-        
-        # Styling Tabel Momentum
+    # --- TABS FOR DIFFERENT TRADING STYLES ---
+    tab_main, tab_rsi, tab_vol = st.tabs(["📊 MAIN BOARD", "📉 RSI SCANNER", "🐋 VOLUME RADAR"])
+    
+    with tab_main:
+        st.subheader("Market Overview (Integrated Signals)")
         st.dataframe(
             df,
             column_config={
-                "Icon": st.column_config.ImageColumn(),
+                "Icon": st.column_config.ImageColumn(width="small"),
                 "Price": st.column_config.NumberColumn(format="$%.4f"),
-                "1h %": st.column_config.NumberColumn(format="%.2f%%"), # Highlight logic auto by value?
                 "24h %": st.column_config.NumberColumn(format="%.2f%%"),
-                "Volume": st.column_config.NumberColumn(format="$%d"),
-                "Vol/Cap": st.column_config.ProgressColumn("Intensity", min_value=0, max_value=1, format="%.2f"),
-                "Chart": st.column_config.LineChartColumn("Trend"),
-                "Score": st.column_config.NumberColumn(help="High Score = Strong Pump Algo"),
-                "ATH Dist %": None
+                "RSI (14)": st.column_config.ProgressColumn(
+                    "RSI Strength", min_value=0, max_value=100, format="%d"
+                ),
+                "Signal": st.column_config.TextColumn("Titan Algo"),
+                "Vol/Cap": st.column_config.NumberColumn(format="%.2f"),
+                "ChartData": None, "ATH Dist %": None
             },
-            height=500,
             use_container_width=True,
-            hide_index=True,
+            height=600,
             selection_mode="single-row",
             on_select="rerun",
-            key="mom_select"
-        )
-        
-    with tab2:
-        st.markdown("### 🐋 Whale Accumulation (High Vol/Cap)")
-        st.write("Koin dengan volume beli yang tidak wajar dibanding Market Cap-nya. Seringkali mendahului kenaikan harga.")
-        
-        # Filter: Urutkan berdasarkan Vol/Cap
-        df_vol = df.sort_values(by='Vol/Cap', ascending=False)
-        st.dataframe(
-            df_vol,
-            column_config={
-                "Icon": st.column_config.ImageColumn(),
-                "Vol/Cap": st.column_config.ProgressColumn("Buying Pressure", min_value=0, max_value=2, format="%.2f"),
-                "1h %": st.column_config.NumberColumn(format="%.2f%%"),
-                "Chart": st.column_config.LineChartColumn("Trend"),
-                "ATH Dist %": None, "Score": None
-            },
-            use_container_width=True,
-            height=500
+            key="main_select"
         )
 
-    with tab3:
-        st.markdown("### 💎 Breakout Ready (Near ATH)")
-        st.write("Koin yang harganya sudah dekat dengan All Time High (< 15% drop). Jika tembus, biasanya pump keras.")
-        
-        # Filter: ATH Dist > -15%
-        df_ath = df[df['ATH Dist %'] > -15].sort_values('ATH Dist %', ascending=False)
+    with tab_rsi:
+        st.subheader("Snipe the Bottom / Sell the Top")
+        st.caption("Focus on RSI Extremes: <30 (Oversold) or >70 (Overbought)")
+        # Sort by RSI ascending (Show lowest first)
+        df_rsi = df.sort_values('RSI (14)', ascending=True)
         st.dataframe(
-            df_ath,
+            df_rsi,
             column_config={
                 "Icon": st.column_config.ImageColumn(),
-                "ATH Dist %": st.column_config.NumberColumn("Dist to ATH", format="%.2f%%"),
-                "Price": st.column_config.NumberColumn(format="$%.2f"),
-                "Chart": st.column_config.LineChartColumn("Trend"),
-                "Vol/Cap": None, "Score": None
+                "RSI (14)": st.column_config.NumberColumn("RSI Value", format="%.1f"),
+                "24h %": st.column_config.NumberColumn(format="%.2f%%"),
+                "ATH Dist %": st.column_config.NumberColumn("Disc. from ATH", format="%.1f%%"),
+                "Price": st.column_config.NumberColumn(format="$%.4f"),
+                "Signal": None, "ChartData": None, "Vol/Cap": None
             },
             use_container_width=True
         )
 
-    # --- ALPHA SIGNAL PANEL ---
-    # Logic: Ambil seleksi dari Tab 1 (Momentum)
-    sel = st.session_state.mom_select
+    with tab_vol:
+        st.subheader("Follow the Money (Whale Tracking)")
+        # Sort by Volume/Cap
+        df_vol = df.sort_values('Vol/Cap', ascending=False)
+        st.dataframe(
+            df_vol,
+            column_config={
+                "Icon": st.column_config.ImageColumn(),
+                "Vol/Cap": st.column_config.ProgressColumn("Money Flow", min_value=0, max_value=1.5),
+                "Volume": st.column_config.NumberColumn("24h Vol", format="$%d"),
+                "Mkt Cap": st.column_config.NumberColumn(format="$%d"),
+                "24h %": st.column_config.NumberColumn(format="%.2f%%"),
+                "Signal": None, "ChartData": None, "RSI (14)": None
+            },
+            use_container_width=True
+        )
+
+    # --- AI ANALYSIS PANEL ---
+    sel = st.session_state.main_select
     if sel and sel["selection"]["rows"]:
         idx = sel["selection"]["rows"][0]
-        # Perhatikan: row index harus diambil dari dataframe asli yang sudah di sort di Tab 1
-        # Karena st.dataframe menampilkan df yang sudah di sort engine, indexnya lurus
+        # Note: Index selection logic needs care if sorted, but streamlit default dataframe keeps index
+        # Better: use the actual filtered df from main tab
         row = df.iloc[idx]
         
-        st.markdown("---")
-        c_chart, c_signal = st.columns([2, 1])
+        st.divider()
+        st.markdown(f"## 🔭 Titan Analysis: {row['Ticker']}")
+        
+        c_chart, c_ai = st.columns([2, 1])
         
         with c_chart:
-            # Render Chart Lebih Detail
-            st.subheader(f"{row['Ticker']} Price Action")
-            
-            # Simulated Candle Data from Sparkline (Approximation)
-            spk = row['Chart']
-            if isinstance(spk, dict): spk = spk.get('price', [])
-            
-            if len(spk) > 0:
-                fig = px.line(y=spk, title=f"7 Day Trend: {row['Name']}")
-                fig.update_traces(line_color='#00ff7f', line_width=3)
+            # CHART VISUALIZATION
+            prices = row['ChartData']
+            if len(prices) > 0:
+                # Warna Chart berdasarkan RSI
+                line_color = '#00ff7f' if row['RSI (14)'] > 50 else '#ff4b4b'
+                
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(y=prices, mode='lines', line=dict(color=line_color, width=2), fill='tozeroy'))
                 fig.update_layout(
-                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
-                    font_color='white',
+                    title=f"7-Day Price Action ({len(prices)} hours)",
+                    template="plotly_dark",
+                    paper_bgcolor="#161b22", plot_bgcolor="#161b22",
+                    margin=dict(l=20, r=20, t=40, b=20),
+                    height=350,
                     xaxis=dict(showgrid=False, showticklabels=False),
                     yaxis=dict(showgrid=True, gridcolor='#30363d')
                 )
                 st.plotly_chart(fig, use_container_width=True)
-        
-        with c_signal:
-            st.markdown('<div class="alpha-card">', unsafe_allow_html=True)
-            st.markdown(f"### 🤖 AI Alpha Call: {row['Ticker']}")
+                
+        with c_ai:
+            st.markdown('<div class="titan-card">', unsafe_allow_html=True)
+            st.markdown("### 🧠 AI Strategist")
             
-            if st.button("GENERATE SIGNAL", key="btn_alpha"):
-                with st.spinner("Analyzing Momentum & Volume..."):
-                    signal = get_alpha_call(row)
-                    st.markdown(signal)
+            if st.button("GENERATE STRATEGY", key="gen_ai"):
+                with st.spinner(f"Analyzing {row['Ticker']} Technicals..."):
+                    strategy = get_titan_strategy(row, fg_val)
+                    st.markdown(strategy)
             else:
-                st.info("Click to ask Gemini about Pump Probability.")
+                st.info("Ask Gemini to correlate RSI, Volume, and Trend.")
             
             st.divider()
-            st.metric("1H Momentum", f"{row['1h %']:.2f}%")
-            st.metric("Volume Strength", f"{row['Vol/Cap']:.2f}", delta="High" if row['Vol/Cap'] > 0.1 else "Normal")
+            # QUICK STATS
+            c1, c2 = st.columns(2)
+            c1.metric("RSI State", f"{row['RSI (14)']:.0f}", "Neutral" if 30<row['RSI (14)']<70 else "EXTREME")
+            c2.metric("Algo Signal", row['Signal'])
             st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    st.error("API Error. CoinGecko sedang sibuk. Coba lagi dalam 1 menit.")
+    st.warning("Data Feed Initializing... Please refresh.")
