@@ -1,6 +1,7 @@
-flask
-flask-cors
-python-dotenv
+streamlit
+ccxt
+pandas
+numpy
+plotly
 google-generativeai
-gunicorn
-
+python-dotenv
