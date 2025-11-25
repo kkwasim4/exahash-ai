@@ -1,278 +1,318 @@
 import streamlit as st
-import ccxt
 import pandas as pd
 import numpy as np
+import requests
+import plotly.express as px
+import plotly.graph_objects as go
 import google.generativeai as genai
 import os
-import time
-from datetime import datetime
-import plotly.graph_objects as go
-import streamlit.components.v1 as components
 
 # ==========================================
-# 1. CONFIGURATION & SETUP
+# 1. SETUP: DARK MODE & TRADER THEME
 # ==========================================
 st.set_page_config(
-    page_title="ExaHash AI | Institutional Grade",
-    page_icon="⚡",
+    page_title="ExaHash Alpha Hunter",
+    page_icon="🚀",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Custom CSS for "Nansen/Coinbase" Professional Look
+# TRADING TERMINAL STYLE (Dark & Neon)
 st.markdown("""
 <style>
-    /* Global Styles */
-    .main { background-color: #f0f2f6; }
-    h1, h2, h3 { font-family: 'Helvetica Neue', sans-serif; font-weight: 700; }
+    /* Dark Theme Background */
+    .stApp { background-color: #0e1117; color: #e6e6e6; }
     
-    /* Metrics Card */
+    /* Metrics */
     div[data-testid="stMetric"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        padding: 15px;
-        border-radius: 10px;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+        background-color: #161b22;
+        border: 1px solid #30363d;
+        border-radius: 6px;
+        padding: 10px;
     }
-
-    /* Custom Cards */
-    .pro-card {
-        background-color: white;
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid #e6e8eb;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-        margin-bottom: 20px;
+    div[data-testid="stMetricValue"] { color: #00ff7f !important; font-family: 'Monospace'; }
+    
+    /* Tables */
+    div[data-testid="stDataFrame"] { background-color: #0e1117; }
+    
+    /* Custom Badge */
+    .pump-badge {
+        background-color: #238636;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 12px;
+        border: 1px solid #2ea043;
+    }
+    .vol-badge {
+        background-color: #1f6feb;
+        color: white;
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-weight: bold;
+        font-size: 12px;
     }
     
-    /* Whale Alert Text */
-    .whale-alert { color: #d946ef; font-weight: bold; }
-    .bull-text { color: #16a34a; }
-    .bear-text { color: #dc2626; }
+    /* AI Card */
+    .alpha-card {
+        background: #161b22;
+        border: 1px solid #30363d;
+        padding: 20px;
+        border-radius: 8px;
+        border-left: 5px solid #00ff7f;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Environment Variables Loading
-# Pastikan API Key diset di Render Environment Variables
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY")
-BINANCE_SECRET = os.getenv("BINANCE_SECRET")
-
-# Init AI
 if GOOGLE_API_KEY:
     genai.configure(api_key=GOOGLE_API_KEY)
-else:
-    st.warning("⚠️ Google API Key missing. AI features will be disabled.")
 
 # ==========================================
-# 2. DATA ENGINE (CCXT)
+# 2. ALPHA ENGINE (MOMENTUM LOGIC)
 # ==========================================
-class DataEngine:
-    def __init__(self):
-        self.exchange = ccxt.binance({
-            'enableRateLimit': True,
-            'apiKey': BINANCE_API_KEY,
-            'secret': BINANCE_SECRET,
-            'options': {'defaultType': 'future'} # Futures data is often better for flow
-        })
-
-    @st.cache_data(ttl=10)
-    def fetch_ticker_data(_self, symbol):
-        try:
-            ticker = _self.exchange.fetch_ticker(symbol)
-            # Fetch recent trades for Whale Analysis
-            trades = _self.exchange.fetch_trades(symbol, limit=100)
-            # Fetch OHLCV for Risk Calculation
-            ohlcv = _self.exchange.fetch_ohlcv(symbol, '1h', limit=24) 
+class AlphaEngine:
+    BASE_URL = "https://api.coingecko.com/api/v3"
+    
+    @st.cache_data(ttl=60) # Refresh tiap 60 detik untuk data momentum
+    def scan_market(_self):
+        all_coins = []
+        # Tarik 400 koin teratas (Cukup untuk cari hidden gem, jangan terlalu bawah nanti scam)
+        pages = [1, 2] 
+        
+        for page in pages:
+            try:
+                params = {
+                    "vs_currency": "usd",
+                    "order": "market_cap_desc",
+                    "per_page": 200, 
+                    "page": page,
+                    "sparkline": "true",
+                    "price_change_percentage": "1h,24h,7d"
+                }
+                res = requests.get(f"{_self.BASE_URL}/coins/markets", params=params)
+                if res.status_code == 200:
+                    all_coins.extend(res.json())
+            except: pass
             
-            return {
-                "ticker": ticker,
-                "trades": trades,
-                "ohlcv": ohlcv,
-                "valid": True
-            }
-        except Exception as e:
-            return {"valid": False, "error": str(e)}
-
-    def calculate_risk_metrics(self, ohlcv_data):
-        if not ohlcv_data: return 0, 0
-        df = pd.DataFrame(ohlcv_data, columns=['time', 'open', 'high', 'low', 'close', 'vol'])
+        if not all_coins: return pd.DataFrame()
         
-        # Volatility (Standard Deviation of returns)
-        df['returns'] = df['close'].pct_change()
-        volatility = df['returns'].std() * 100 # Percentage
+        df = pd.DataFrame(all_coins)
         
-        # RSI Simple Calculation
-        delta = df['close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
+        # --- RUMUS PUMP DETECTOR ---
         
-        return volatility, rsi.iloc[-1]
+        # 1. Volume Intensity (Turnover)
+        # Jika Volume > 20% Market Cap, artinya ada akumulasi masif
+        df['vol_intensity'] = df['total_volume'] / df['market_cap']
+        
+        # 2. Momentum Score (0-100)
+        # Fokus pada kenaikan 1 jam terakhir (Immediate Pump)
+        # Rumus: (1h% * 3) + (24h% * 1). Kita beri bobot tinggi pada 1H.
+        df['1h_change'] = df['price_change_percentage_1h_in_currency']
+        df['24h_change'] = df['price_change_percentage_24h_in_currency']
+        
+        # Normalisasi NaNs
+        df['1h_change'] = df['1h_change'].fillna(0)
+        df['24h_change'] = df['24h_change'].fillna(0)
+        
+        df['momentum_score'] = (df['1h_change'] * 3) + df['24h_change']
+        
+        # 3. Near ATH (Breakout Potential)
+        df['dist_from_ath'] = df['ath_change_percentage'] # Usually negative
+        
+        # 4. Filter Volume Minimum (Hilangkan koin mati/scam dengan volume < $1M)
+        df = df[df['total_volume'] > 1_000_000].copy()
+        
+        # Formatting Columns
+        cols = [
+            'image', 'symbol', 'name', 'current_price', 
+            '1h_change', '24h_change', 'total_volume', 
+            'vol_intensity', 'momentum_score', 'sparkline_in_7d', 'dist_from_ath'
+        ]
+        
+        final = df[cols].copy()
+        final.columns = [
+            'Icon', 'Ticker', 'Name', 'Price', 
+            '1h %', '24h %', 'Volume', 
+            'Vol/Cap', 'Score', 'Chart', 'ATH Dist %'
+        ]
+        final['Ticker'] = final['Ticker'].str.upper()
+        
+        # Sort by Momentum Score by default
+        return final.sort_values(by='Score', ascending=False)
 
-    def get_whale_activity(self, trades, min_usd=50000):
-        whales = []
-        net_flow = 0
-        for t in trades:
-            cost = t['cost'] if 'cost' in t else (t['price'] * t['amount'])
-            if cost >= min_usd:
-                whales.append(t)
-                if t['side'] == 'buy': net_flow += cost
-                else: net_flow -= cost
-        return whales, net_flow
-
-engine = DataEngine()
+engine = AlphaEngine()
 
 # ==========================================
-# 3. UI COMPONENTS
+# 3. AI ALPHA CALLER
 # ==========================================
-
-# --- SIDEBAR ---
-with st.sidebar:
-    st.markdown("## 🧭 ExaHash Controller")
-    selected_symbol = st.selectbox("Select Asset", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "DOGE/USDT"])
+def get_alpha_call(row):
+    if not GOOGLE_API_KEY: return "AI Key Missing."
     
-    st.markdown("---")
-    st.markdown("### AI Settings")
-    ai_model = st.selectbox("Model", ["gemini-1.5-flash", "gemini-pro"])
+    # Prompt khusus mencari PUMP
+    prompt = f"""
+    You are a "Degen" Crypto Analyst looking for pumps and breakouts.
+    Analyze {row['Ticker']}:
+    - 1h Change: {row['1h %']:.2f}% (Immediate Action)
+    - 24h Change: {row['24h %']:.2f}%
+    - Volume Intensity: {row['Vol/Cap']:.2f} (Normal is 0.05, Pump is > 0.2)
+    - Distance from ATH: {row['ATH Dist %']:.2f}%
     
-    st.markdown("---")
-    st.info("💡 Data Source: Binance Futures (Real-time)")
-
-# --- MAIN LOGIC ---
-st.title(f"ExaHash AI Dashboard: {selected_symbol}")
-
-# Fetch Data
-data = engine.fetch_ticker_data(selected_symbol)
-
-if data['valid']:
-    ticker = data['ticker']
-    trades = data['trades']
-    ohlcv = data['ohlcv']
-    
-    current_price = ticker['last']
-    change_24h = ticker['percentage']
-    volume_24h = ticker['quoteVolume']
-    
-    volatility, rsi = engine.calculate_risk_metrics(ohlcv)
-    whales, whale_net_flow = engine.get_whale_activity(trades)
-    
-    # 1. TOP METRICS
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Price", f"${current_price:,.2f}", f"{change_24h:.2f}%")
-    c2.metric("24h Volume", f"${volume_24h/1000000:.2f}M")
-    c3.metric("RSI (1H)", f"{rsi:.1f}", "Overbought" if rsi > 70 else ("Oversold" if rsi < 30 else "Neutral"))
-    c4.metric("Volatility", f"{volatility:.2f}%")
-
-    # 2. TRADINGVIEW WIDGET (PROFESSIONAL CHART)
-    st.markdown("### 📉 Live Market Chart")
-    # TradingView Widget Embed
-    tv_symbol = f"BINANCE:{selected_symbol.replace('/','')}"
-    
-    html_code = f"""
-    <div class="tradingview-widget-container">
-      <div id="tradingview_chart"></div>
-      <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
-      <script type="text/javascript">
-      new TradingView.widget(
-      {{
-        "width": "100%",
-        "height": 500,
-        "symbol": "{tv_symbol}",
-        "interval": "60",
-        "timezone": "Etc/UTC",
-        "theme": "light",
-        "style": "1",
-        "locale": "en",
-        "toolbar_bg": "#f1f3f6",
-        "enable_publishing": false,
-        "allow_symbol_change": true,
-        "container_id": "tradingview_chart"
-      }}
-      );
-      </script>
-    </div>
+    Is this a "PUMP SIGNAL"?
+    Output strict format:
+    **SIGNAL:** [BUY BREAKOUT / WAIT / FAKE PUMP]
+    **CONFIDENCE:** [0-100]%
+    **REASON:** (One short sentence about volume/momentum).
     """
-    components.html(html_code, height=500)
+    try:
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        return model.generate_content(prompt).text
+    except: return "AI Busy."
 
-    # 3. AI RISK SCORING & ANALYSIS
-    col_ai, col_nansen = st.columns([1, 1])
+# ==========================================
+# 4. DASHBOARD UI
+# ==========================================
 
-    with col_ai:
-        st.markdown('<div class="pro-card">', unsafe_allow_html=True)
-        st.subheader("🤖 AI Risk Scorer")
-        
-        # Calculate Logic for Prompt
-        sentiment_label = "BULLISH" if whale_net_flow > 0 else "BEARISH"
-        risk_level = "HIGH" if volatility > 2.0 else "MODERATE"
-        
-        if st.button("Generate AI Risk Report"):
-            if GOOGLE_API_KEY:
-                with st.spinner("Analyzing market structure..."):
-                    prompt = f"""
-                    Act as a Senior Crypto Risk Analyst. Analyze {selected_symbol} based on this real-time data:
-                    - Price: ${current_price}
-                    - 24h Change: {change_24h}%
-                    - RSI (1h): {rsi:.1f}
-                    - Volatility: {volatility:.2f}%
-                    - Whale Net Flow (Last 100 trades): ${whale_net_flow:,.2f}
-                    
-                    Provide a professional JSON-style output with:
-                    1. Risk Score (0-100, where 100 is extreme risk).
-                    2. Market Sentiment (Bullish/Bearish/Neutral).
-                    3. Key Resistance/Support levels (estimate based on price).
-                    4. Short Actionable Insight for Institutional Traders.
-                    """
-                    try:
-                        model = genai.GenerativeModel(ai_model)
-                        response = model.generate_content(prompt)
-                        st.markdown(response.text)
-                    except Exception as e:
-                        st.error(f"AI Error: {e}")
-            else:
-                st.error("Configure GOOGLE_API_KEY to use AI.")
-        else:
-            st.write("Click button to analyze market data with Gemini.")
-        st.markdown('</div>', unsafe_allow_html=True)
+# HEADER
+c1, c2 = st.columns([8, 2])
+with c1:
+    st.title("🚀 ExaHash Alpha Hunter")
+    st.caption("Momentum Scanner • Volume Shock Detector • Breakout Radar")
+with c2:
+    if st.button("🔥 SCAN MARKET"):
+        st.cache_data.clear()
+        st.rerun()
 
-    # 4. NANSEN-STYLE WHALE FEED
-    with col_nansen:
-        st.markdown('<div class="pro-card">', unsafe_allow_html=True)
-        st.subheader("🐋 Whale Signal Feed (>$50k)")
+# LOAD DATA
+with st.spinner("Scanning for high momentum assets..."):
+    df = engine.scan_market()
+
+if not df.empty:
+    # --- HOT METRICS ---
+    # Cari koin yang lagi "Gila" (1h change > 3% dan Volume tinggi)
+    hot_coins = df[ (df['1h %'] > 2) & (df['Vol/Cap'] > 0.1) ]
+    top_vol = df.sort_values('Vol/Cap', ascending=False).iloc[0]
+    top_gain = df.sort_values('24h %', ascending=False).iloc[0]
+    
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Pump Candidates", f"{len(hot_coins)} Assets", "Active Now")
+    m2.metric("Highest Volume Stress", f"{top_vol['Ticker']}", f"{top_vol['Vol/Cap']:.2f} Ratio")
+    m3.metric("Top Gainer (24h)", f"{top_gain['Ticker']}", f"+{top_gain['24h %']:.1f}%")
+    m4.metric("Market Sentiment", "Greed" if len(hot_coins) > 5 else "Neutral")
+
+    # --- TABS STRATEGI ---
+    tab1, tab2, tab3 = st.tabs(["🚀 MOMENTUM (Pumps)", "🐋 VOLUME SHOCK", "💎 NEAR ATH"])
+    
+    with tab1:
+        st.markdown("### ⚡ Fast Movers (High 1H %)")
+        st.write("Koin yang sedang bergerak **sekarang**. Fokus pada kolom **1h %**.")
         
-        if whales:
-            df_whales = pd.DataFrame(whales)
-            df_whales['time'] = pd.to_datetime(df_whales['timestamp'], unit='ms').dt.strftime('%H:%M:%S')
-            df_whales['value'] = df_whales['cost'].apply(lambda x: f"${x:,.0f}")
-            df_whales['side'] = df_whales['side'].str.upper()
+        # Styling Tabel Momentum
+        st.dataframe(
+            df,
+            column_config={
+                "Icon": st.column_config.ImageColumn(),
+                "Price": st.column_config.NumberColumn(format="$%.4f"),
+                "1h %": st.column_config.NumberColumn(format="%.2f%%"), # Highlight logic auto by value?
+                "24h %": st.column_config.NumberColumn(format="%.2f%%"),
+                "Volume": st.column_config.NumberColumn(format="$%d"),
+                "Vol/Cap": st.column_config.ProgressColumn("Intensity", min_value=0, max_value=1, format="%.2f"),
+                "Chart": st.column_config.LineChartColumn("Trend"),
+                "Score": st.column_config.NumberColumn(help="High Score = Strong Pump Algo"),
+                "ATH Dist %": None
+            },
+            height=500,
+            use_container_width=True,
+            hide_index=True,
+            selection_mode="single-row",
+            on_select="rerun",
+            key="mom_select"
+        )
+        
+    with tab2:
+        st.markdown("### 🐋 Whale Accumulation (High Vol/Cap)")
+        st.write("Koin dengan volume beli yang tidak wajar dibanding Market Cap-nya. Seringkali mendahului kenaikan harga.")
+        
+        # Filter: Urutkan berdasarkan Vol/Cap
+        df_vol = df.sort_values(by='Vol/Cap', ascending=False)
+        st.dataframe(
+            df_vol,
+            column_config={
+                "Icon": st.column_config.ImageColumn(),
+                "Vol/Cap": st.column_config.ProgressColumn("Buying Pressure", min_value=0, max_value=2, format="%.2f"),
+                "1h %": st.column_config.NumberColumn(format="%.2f%%"),
+                "Chart": st.column_config.LineChartColumn("Trend"),
+                "ATH Dist %": None, "Score": None
+            },
+            use_container_width=True,
+            height=500
+        )
+
+    with tab3:
+        st.markdown("### 💎 Breakout Ready (Near ATH)")
+        st.write("Koin yang harganya sudah dekat dengan All Time High (< 15% drop). Jika tembus, biasanya pump keras.")
+        
+        # Filter: ATH Dist > -15%
+        df_ath = df[df['ATH Dist %'] > -15].sort_values('ATH Dist %', ascending=False)
+        st.dataframe(
+            df_ath,
+            column_config={
+                "Icon": st.column_config.ImageColumn(),
+                "ATH Dist %": st.column_config.NumberColumn("Dist to ATH", format="%.2f%%"),
+                "Price": st.column_config.NumberColumn(format="$%.2f"),
+                "Chart": st.column_config.LineChartColumn("Trend"),
+                "Vol/Cap": None, "Score": None
+            },
+            use_container_width=True
+        )
+
+    # --- ALPHA SIGNAL PANEL ---
+    # Logic: Ambil seleksi dari Tab 1 (Momentum)
+    sel = st.session_state.mom_select
+    if sel and sel["selection"]["rows"]:
+        idx = sel["selection"]["rows"][0]
+        # Perhatikan: row index harus diambil dari dataframe asli yang sudah di sort di Tab 1
+        # Karena st.dataframe menampilkan df yang sudah di sort engine, indexnya lurus
+        row = df.iloc[idx]
+        
+        st.markdown("---")
+        c_chart, c_signal = st.columns([2, 1])
+        
+        with c_chart:
+            # Render Chart Lebih Detail
+            st.subheader(f"{row['Ticker']} Price Action")
             
-            # Styling grid
-            for idx, row in df_whales.iterrows():
-                color = "#dcfce7" if row['side'] == 'BUY' else "#fee2e2" # Light Green / Red
-                text_color = "green" if row['side'] == 'BUY' else "red"
-                icon = "🟢" if row['side'] == 'BUY' else "🔴"
-                
-                st.markdown(
-                    f"""
-                    <div style="background-color:{color}; padding:8px; border-radius:6px; margin-bottom:8px; font-size:14px; display:flex; justify-content:space-between;">
-                        <span>{icon} <b>{row['side']}</b></span>
-                        <span>{row['amount']:.4f} {selected_symbol.split('/')[0]}</span>
-                        <span style="font-weight:bold;">{row['value']}</span>
-                        <span style="color:#666;">{row['time']}</span>
-                    </div>
-                    """, 
-                    unsafe_allow_html=True
+            # Simulated Candle Data from Sparkline (Approximation)
+            spk = row['Chart']
+            if isinstance(spk, dict): spk = spk.get('price', [])
+            
+            if len(spk) > 0:
+                fig = px.line(y=spk, title=f"7 Day Trend: {row['Name']}")
+                fig.update_traces(line_color='#00ff7f', line_width=3)
+                fig.update_layout(
+                    paper_bgcolor='#0e1117', plot_bgcolor='#0e1117',
+                    font_color='white',
+                    xaxis=dict(showgrid=False, showticklabels=False),
+                    yaxis=dict(showgrid=True, gridcolor='#30363d')
                 )
-        else:
-            st.info("No whale movements detected in the last 100 trades.")
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with c_signal:
+            st.markdown('<div class="alpha-card">', unsafe_allow_html=True)
+            st.markdown(f"### 🤖 AI Alpha Call: {row['Ticker']}")
             
-        st.caption(f"Net Whale Flow: ${whale_net_flow:,.0f}")
-        st.markdown('</div>', unsafe_allow_html=True)
+            if st.button("GENERATE SIGNAL", key="btn_alpha"):
+                with st.spinner("Analyzing Momentum & Volume..."):
+                    signal = get_alpha_call(row)
+                    st.markdown(signal)
+            else:
+                st.info("Click to ask Gemini about Pump Probability.")
+            
+            st.divider()
+            st.metric("1H Momentum", f"{row['1h %']:.2f}%")
+            st.metric("Volume Strength", f"{row['Vol/Cap']:.2f}", delta="High" if row['Vol/Cap'] > 0.1 else "Normal")
+            st.markdown('</div>', unsafe_allow_html=True)
 
 else:
-    st.error(f"Failed to load data: {data.get('error')}")
-
-# Footer
-st.markdown("---")
-st.markdown("<center style='color:#888;'>ExaHash AI • Powered by Gemini 2.0 & CCXT • Institutional Data</center>", unsafe_allow_html=True)
+    st.error("API Error. CoinGecko sedang sibuk. Coba lagi dalam 1 menit.")
