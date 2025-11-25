@@ -1,7 +1,6 @@
 streamlit
-ccxt
 pandas
 numpy
+requests
 plotly
 google-generativeai
-python-dotenv
