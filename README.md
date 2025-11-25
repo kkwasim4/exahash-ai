@@ -1,4 +1,4 @@
-# Exahash AI — Streamlit + Multi Exchange
+# Exahash AI — Streamlit + Dual Exchange
 
 Deployment guide:
 
@@ -11,9 +11,3 @@ Deployment guide:
 6. Start Command:
     streamlit run app.py --server.port=$PORT --server.address=0.0.0.0
 7. Add Environment Variables:
-    BINANCE_API_KEY
-    BINANCE_SECRET_KEY
-    BYBIT_API_KEY
-    BYBIT_SECRET_KEY
-
-Done — the app goes live in Render.
