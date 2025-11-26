@@ -13,4 +13,4 @@ uvicorn app:app --reload
 
 ## Environment
 Create `.env` file:
-ALCHEMY_KEY=your_key_here
+ALCHEMY_KEY=fVBi45utwtRqvSlF_LfAX
