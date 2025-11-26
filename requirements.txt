@@ -1,7 +1,4 @@
-streamlit
-pandas
-numpy
+fastapi
+uvicorn
 requests
-plotly
-google-generativeai
-ta-lib-python 
+python-dotenv
