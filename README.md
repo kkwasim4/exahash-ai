@@ -1,15 +1,16 @@
-# ExaHash AI - Institutional Crypto Dashboard
+# Kkwasim4 Spot Trading Scanner
+A real-time crypto spot scanner featuring:
+- OBV indicator
+- Mini-chart per pair
+- Auto-loop price refresh
+- Token scanner using Alchemy API
+- Clean Coinbase-style UI
 
-Professional crypto analysis app using Streamlit, Gemini AI, and Real-time Data from Binance (via CCXT).
 
-## Features
-- **Live TradingView Chart**: Interactive real-time charts.
-- **AI Risk Scoring**: Uses Google Gemini to analyze risk and market sentiment.
-- **Whale Feed**: Detects large transactions (>$50k) a la Nansen.
-- **Multi-Exchange Data**: Integrated with CCXT.
+## Run
+uvicorn app:app --reload
 
-## How to Run Locally
-1. Clone this repo.
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
+
+## Environment
+Create `.env` file:
+ALCHEMY_KEY=your_key_here
